@@ -25,7 +25,7 @@ def index():
    return render_template('crime.html')
 
 
-@app.route('/crimeOutput',  methods=['GET', 'POST', 'DELETE', 'PATCH'])
+@app.route('/FlaskTutorial',  methods=['GET', 'POST', 'DELETE', 'PATCH'])
 
 def success(crimeId=None):
    if request.method == 'POST':
