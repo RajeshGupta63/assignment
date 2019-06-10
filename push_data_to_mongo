@@ -1,0 +1,84 @@
+import json
+import os
+import re
+
+import pandas as pd
+from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
+
+BASE_PATH = "/Users/rivigo/police/"
+
+
+def get_mongo_collection():
+    mongo_client = MongoClient()
+    db = mongo_client['crime']
+    return db['crime']
+
+
+def get_districts_dict():
+    districts = dict()
+    for directories in os.listdir(BASE_PATH):
+        districts[directories] = dict()
+        for f in os.listdir(BASE_PATH + directories):
+            match_obj = re.match(r'(\d{4}-\d{2}-)(.*)(-(street|outcomes).csv)', f, re.M | re.I)
+            if match_obj:
+                if match_obj.group(2) not in districts[match_obj.group(1)[:-1]]:
+                    districts[match_obj.group(1)[:-1]][match_obj.group(2)] = []
+                districts[match_obj.group(1)[:-1]][match_obj.group(2)].append(
+                    match_obj.group(1) + match_obj.group(2) + match_obj.group(3))
+    return districts
+
+
+def df_for_missing_data(districts, m, d):
+    street_or_outcome = districts[m][d][0]
+    df = pd.read_csv(os.path.join(BASE_PATH, m, street_or_outcome), dtype=str)
+    if 'street' in street_or_outcome:
+        df = df[['Crime ID', 'Longitude', 'Latitude', 'Crime type']]
+        df['lastOutcome'] = None
+        df['district'] = d
+        df.columns = ['_id', 'longitude', 'latitude', 'crimeType', 'lastOutcome', 'district']
+    else:
+        df = df[['Crime ID', 'Longitude', 'Latitude', 'Outcome type']]
+        df['crimeType'] = None
+        df['district'] = d
+        df.columns = ['_id', 'longitude', 'latitude', 'lastOutcome', 'crimeType', 'district']
+    return df
+
+
+def merged_df(districts, m, d):
+    street = districts[m][d][0] if 'street' in districts[m][d][0] else \
+        districts[m][d][1]
+    outcome = districts[m][d][0] if 'outcomes' in districts[m][d][0] else \
+        districts[m][d][1]
+    street_df = pd.read_csv(os.path.join(BASE_PATH, m, street), dtype=str)
+    outcome_df = pd.read_csv(os.path.join(BASE_PATH, m, outcome), dtype=str)
+    df = pd.merge(street_df[["Crime ID", "Longitude", "Latitude", "Crime type"]],
+                  outcome_df[["Crime ID", "Outcome type"]], on="Crime ID")
+    df = df.groupby('Crime ID').tail(1)
+    df['district'] = d
+    df.columns = ['_id', 'longitude', 'latitude', 'crimeType', 'lastOutcome', 'district']
+    return df
+
+
+def insert_to_mongo(data_json):
+    try:
+        mongo_collection = get_mongo_collection()
+        mongo_collection.insert(data_json, continue_on_error=True)
+    except DuplicateKeyError as e:
+        print e.message
+
+
+def process():
+    districts_dict = get_districts_dict()
+    for month in sorted(districts_dict, reverse=True):
+        for district in districts_dict[month]:
+            if len(districts_dict[month][district]) != 2:
+                df = df_for_missing_data(districts_dict, month, district)
+            else:
+                df = merged_df(districts_dict, month, district)
+
+            insert_to_mongo(json.loads(df.to_json(orient='records')))
+
+
+if __name__ == '__main__':
+    process()
